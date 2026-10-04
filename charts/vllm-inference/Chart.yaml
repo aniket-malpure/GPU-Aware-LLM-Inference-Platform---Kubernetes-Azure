@@ -1,0 +1,9 @@
+apiVersion: v2
+name: vllm-inference
+description: GPU-backed vLLM OpenAI-compatible inference server with stable/canary tracks and a GPUAutoscaler.
+type: application
+version: 0.3.0
+appVersion: "v0.8.5.post1"
+keywords: [vllm, llm, inference, gpu, nvidia, aks]
+maintainers:
+  - name: Aniket Malpure

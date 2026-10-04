@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vllm.fullname" . }}-stable
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+    track: stable
+spec:
+  {{- if not .Values.autoscaler.enabled }}
+  replicas: {{ .Values.stable.replicas }}
+  {{- end }}
+  # Leaving replicas unset when the GPUAutoscaler is on means helm upgrade
+  # will not reset the count the controller chose.
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Bring the new GPU replica up before taking an old one down.
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "vllm.selectorLabels" . | nindent 6 }}
+      track: stable
+  template:
+    {{- include "vllm.podTemplate" (dict "root" . "track" "stable" "tag" .Values.image.tag "extraArgs" (list)) | nindent 4 }}

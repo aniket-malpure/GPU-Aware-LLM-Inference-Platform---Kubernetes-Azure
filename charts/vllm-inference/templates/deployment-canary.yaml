@@ -1,0 +1,18 @@
+{{- if .Values.canary.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vllm.fullname" . }}-canary
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+    track: canary
+spec:
+  replicas: {{ .Values.canary.replicas }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "vllm.selectorLabels" . | nindent 6 }}
+      track: canary
+  template:
+    {{- include "vllm.podTemplate" (dict "root" . "track" "canary" "tag" (default .Values.image.tag .Values.canary.image.tag) "extraArgs" .Values.canary.model.extraArgs) | nindent 4 }}
+{{- end }}

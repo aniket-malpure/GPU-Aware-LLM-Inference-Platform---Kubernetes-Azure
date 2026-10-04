@@ -1,0 +1,13 @@
+subscription_id = "00000000-0000-0000-0000-000000000000"
+prefix          = "llminfer"
+location        = "eastus"
+
+# One A100 80GB per node. Check quota first:
+#   az vm list-usage -l eastus -o table | grep -i "NCADS_A100"
+gpu_vm_size   = "Standard_NC24ads_A100_v4"
+gpu_min_nodes = 0
+gpu_max_nodes = 3
+gpu_use_spot  = true
+
+# Budget option (A10 24GB, pair with an AWQ model in charts/vllm-inference/values-a10.yaml):
+# gpu_vm_size = "Standard_NV36ads_A10_v5"

@@ -1,0 +1,19 @@
+# Budget profile for Standard_NV36ads_A10_v5 (one A10, 24GB).
+# A 4-bit AWQ build of Llama 3 8B leaves headroom for KV cache on 24GB.
+model:
+  name: casperhansen/llama-3-8b-instruct-awq
+  servedName: llama-3-8b
+  quantization: awq
+  maxModelLen: 4096
+  gpuMemoryUtilization: 0.90
+  maxNumSeqs: 32
+
+resources:
+  requests:
+    cpu: "6"
+    memory: 32Gi
+  limits:
+    memory: 64Gi
+
+autoscaler:
+  targetLoadPerReplica: 8

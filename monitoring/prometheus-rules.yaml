@@ -1,0 +1,103 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llm-inference
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    # -------------------------------------------------------------------------
+    # Recording rules: cheaper dashboards and the canary gate in scripts/canary.sh
+    # -------------------------------------------------------------------------
+    - name: llm-inference.recording
+      interval: 30s
+      rules:
+        - record: llm:ttft_seconds:p95_5m
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le, namespace, track) (rate(vllm:time_to_first_token_seconds_bucket[5m])))
+        - record: llm:e2e_latency_seconds:p95_5m
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le, namespace, track) (rate(vllm:e2e_request_latency_seconds_bucket[5m])))
+        - record: llm:generation_tokens:rate5m
+          expr: sum by (namespace, track) (rate(vllm:generation_tokens_total[5m]))
+        - record: llm:requests_in_flight
+          expr: |
+            sum by (namespace, track) (vllm:num_requests_running)
+            + sum by (namespace, track) (vllm:num_requests_waiting)
+        - record: llm:request_error_ratio:rate5m
+          # vLLM counts finished requests by finished_reason; "abort" covers
+          # client disconnects and engine errors.
+          expr: |
+            sum by (namespace, track) (rate(vllm:request_success_total{finished_reason="abort"}[5m]))
+            /
+            clamp_min(sum by (namespace, track) (rate(vllm:request_success_total[5m])), 1e-9)
+        # GPUs allocated to vLLM pods whose utilization stayed under 10%.
+        # Integrate this in Grafana to get idle GPU-hours per day.
+        - record: llm:gpu_idle:count
+          expr: |
+            count(avg_over_time(DCGM_FI_DEV_GPU_UTIL{namespace="llm"}[5m]) < 10) or vector(0)
+        - record: llm:gpu_allocated:count
+          expr: count(DCGM_FI_DEV_GPU_UTIL{namespace="llm"}) or vector(0)
+
+    # -------------------------------------------------------------------------
+    # Alerts
+    # -------------------------------------------------------------------------
+    - name: llm-inference.alerts
+      rules:
+        - alert: LLMHighTimeToFirstToken
+          expr: llm:ttft_seconds:p95_5m{track="stable"} > 2
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "p95 time-to-first-token above 2s ({{ $value | humanizeDuration }})"
+            description: "Queueing on {{ $labels.namespace }}. Check whether the GPUAutoscaler is at maxReplicas or GPU nodes are pending."
+
+        - alert: LLMQueueBacklog
+          expr: sum by (namespace) (vllm:num_requests_waiting) > 32
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $value }} requests waiting for a GPU slot"
+            description: "Sustained queue. Likely causes: autoscaler cooldown, GPU quota, or Spot capacity in the region."
+
+        - alert: LLMKVCacheSaturated
+          expr: max by (namespace, pod) (vllm:gpu_cache_usage_perc) > 0.95
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "KV cache above 95% on {{ $labels.pod }}"
+            description: "vLLM will start preempting sequences. Lower max-num-seqs or add replicas."
+
+        - alert: LLMCanaryErrorRateHigh
+          expr: |
+            llm:request_error_ratio:rate5m{track="canary"}
+              > 2 * clamp_min(llm:request_error_ratio:rate5m{track="stable"}, 0.005)
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: "Canary error ratio is more than double stable"
+            description: "Roll back with: make canary-rollback"
+
+        - alert: LLMPodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total{namespace="llm", container="vllm"}[15m]) > 2
+          labels: {severity: critical}
+          annotations:
+            summary: "vLLM container restarting on {{ $labels.pod }}"
+            description: "Common causes: CUDA OOM (lower gpu-memory-utilization), bad HF token, Spot eviction."
+
+        - alert: GPUAutoscalerErrors
+          expr: increase(gpuautoscaler_reconcile_errors_total[10m]) > 5
+          labels: {severity: warning}
+          annotations:
+            summary: "GPU autoscaler failing to reconcile"
+            description: "Check controller logs: kubectl -n gpu-autoscaler logs deploy/gpu-autoscaler"
+
+        - alert: GPUNodeXidErrors
+          expr: increase(DCGM_FI_DEV_XID_ERRORS[10m]) > 0
+          labels: {severity: critical}
+          annotations:
+            summary: "NVIDIA XID error on {{ $labels.Hostname }}"
+            description: "Driver or hardware fault. Cordon the node: kubectl cordon {{ $labels.Hostname }}"

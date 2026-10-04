@@ -1,0 +1,110 @@
+# -----------------------------------------------------------------------------
+# Model
+# -----------------------------------------------------------------------------
+model:
+  # Gated on Hugging Face: accept the license on the model page, then create the
+  # token secret (scripts/bootstrap.sh does this from $HF_TOKEN).
+  name: meta-llama/Meta-Llama-3-8B-Instruct
+  servedName: llama-3-8b
+  maxModelLen: 8192
+  gpuMemoryUtilization: 0.90
+  maxNumSeqs: 64            # upper bound on sequences batched per replica
+  dtype: auto
+  quantization: ""          # e.g. "awq" for values-a10.yaml
+  extraArgs: []
+  hfTokenSecret:
+    name: hf-token
+    key: token
+
+image:
+  repository: vllm/vllm-openai
+  tag: v0.8.5.post1
+  pullPolicy: IfNotPresent
+
+# -----------------------------------------------------------------------------
+# Tracks. The Service selects both, so traffic splits by ready pod count.
+# With stable at 3 replicas and canary at 1, the canary takes about 25%.
+# -----------------------------------------------------------------------------
+stable:
+  replicas: 1               # ignored once the GPUAutoscaler owns replica count
+
+canary:
+  enabled: false
+  replicas: 1
+  image:
+    tag: ""                 # defaults to image.tag
+  model:
+    extraArgs: []
+
+# -----------------------------------------------------------------------------
+# GPU scheduling (matches the Terraform node pool labels and taints)
+# -----------------------------------------------------------------------------
+gpu:
+  count: 1
+nodeSelector:
+  accelerator: nvidia
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Equal
+    value: present
+    effect: NoSchedule
+  - key: kubernetes.azure.com/scalesetpriority
+    operator: Equal
+    value: spot
+    effect: NoSchedule
+
+resources:
+  requests:
+    cpu: "6"
+    memory: 48Gi
+  limits:
+    memory: 96Gi
+
+# Shared Hugging Face cache so new replicas skip the 16GB weight download.
+modelCache:
+  enabled: true
+  storageClassName: azurefile-csi-premium
+  size: 100Gi
+
+# /dev/shm for NCCL and tokenizer workers.
+shmSize: 16Gi
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# vLLM loads weights before /health returns 200. Allow up to 20 minutes on a
+# cold node (image pull + download), then probe fast.
+probes:
+  startup:
+    failureThreshold: 120
+    periodSeconds: 10
+  readiness:
+    periodSeconds: 5
+  liveness:
+    periodSeconds: 15
+    failureThreshold: 4
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+serviceMonitor:
+  enabled: true
+  interval: 10s
+  labels:
+    release: kube-prometheus-stack
+
+# -----------------------------------------------------------------------------
+# GPUAutoscaler custom resource (controller/ in this repo)
+# -----------------------------------------------------------------------------
+autoscaler:
+  enabled: true
+  # Keep one warm replica: with zero pods there are no vLLM metrics to wake on.
+  # For true scale-to-zero, point loadQuery at a gateway/ingress request metric.
+  minReplicas: 1
+  maxReplicas: 3
+  targetLoadPerReplica: 16
+  scaleUpCooldownSeconds: 60
+  scaleDownCooldownSeconds: 300
+  idleSecondsBeforeZero: 900

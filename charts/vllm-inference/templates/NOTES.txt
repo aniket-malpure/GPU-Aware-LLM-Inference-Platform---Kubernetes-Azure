@@ -1,0 +1,16 @@
+vLLM is starting. The first replica on a fresh GPU node can take 10-20 minutes
+(node provisioning, image pull, weight download). Watch it with:
+
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }} -w
+
+Then test it:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "vllm.fullname" . }} 8000:{{ .Values.service.port }}
+  curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' \
+    -d '{"model":"{{ .Values.model.servedName }}","messages":[{"role":"user","content":"Say hi"}],"max_tokens":32}'
+{{- if .Values.autoscaler.enabled }}
+
+Autoscaler status:
+
+  kubectl -n {{ .Release.Namespace }} get gpuautoscalers
+{{- end }}

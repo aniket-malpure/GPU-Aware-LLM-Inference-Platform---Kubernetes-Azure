@@ -1,0 +1,75 @@
+{{- if .Values.modelCache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "vllm.fullname" . }}-models
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep   # don't throw away 16GB of weights on uninstall
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: {{ .Values.modelCache.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.modelCache.size }}
+---
+{{- end }}
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "vllm.fullname" . }}
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "vllm.selectorLabels" . | nindent 6 }}
+---
+{{- end }}
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "vllm.fullname" . }}
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+    {{- toYaml .Values.serviceMonitor.labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "vllm.labels" . | nindent 6 }}
+    matchExpressions:
+      - key: track
+        operator: Exists
+  # Copies the pod's track label onto every vLLM metric (track="stable|canary").
+  podTargetLabels: [track]
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+---
+{{- end }}
+{{- if .Values.autoscaler.enabled }}
+apiVersion: inference.llmplatform.dev/v1alpha1
+kind: GPUAutoscaler
+metadata:
+  name: {{ include "vllm.fullname" . }}-stable
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    name: {{ include "vllm.fullname" . }}-stable
+  minReplicas: {{ .Values.autoscaler.minReplicas }}
+  maxReplicas: {{ .Values.autoscaler.maxReplicas }}
+  targetLoadPerReplica: {{ .Values.autoscaler.targetLoadPerReplica }}
+  scaleUpCooldownSeconds: {{ .Values.autoscaler.scaleUpCooldownSeconds }}
+  scaleDownCooldownSeconds: {{ .Values.autoscaler.scaleDownCooldownSeconds }}
+  idleSecondsBeforeZero: {{ .Values.autoscaler.idleSecondsBeforeZero }}
+  loadQuery: >-
+    (sum(vllm:num_requests_waiting{namespace="{{ .Release.Namespace }}",track="stable"})
+    + sum(vllm:num_requests_running{namespace="{{ .Release.Namespace }}",track="stable"}))
+    or vector(0)
+{{- end }}
